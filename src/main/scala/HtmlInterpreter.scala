@@ -5,14 +5,10 @@ object StartDoc extends HtmlEvent
 object EndDoc extends HtmlEvent
 final case class StartElem(name: String) extends HtmlEvent
 object EndElem extends HtmlEvent
-final case class Text(text: String) extends HtmlEvent
+final case class TextNode(text: String) extends HtmlEvent
 
 trait HtmlTokenizer {
   def apply(html: String): Iterator[HtmlEvent]
-}
-
-trait Elem extends Product {
-  val name: String
 }
 
 object HtmlInterpreter extends Application {
@@ -28,7 +24,7 @@ object HtmlInterpreter extends Application {
         case _: EndDocument => EndDoc
         case startElem: StartElement => StartElem(startElem.getName.getLocalPart)
         case _: EndElement => EndElem
-        case text: Characters => Text(text.getData)
+        case text: Characters => TextNode(text.getData)
       }
     }
   }
@@ -63,11 +59,24 @@ object HtmlInterpreter extends Application {
           seq = seq.tail
           result.append("}\n")
         }
-        case Text(text) => result.append(text)
+        case TextNode(text) => {
+          val indent = new StringBuilder()
+          (0 until level) foreach { _ => indent.append("  ") }
+          result.append(indent)
+          result.append("object _")
+          result.append(seq.head)
+          result.append(" implements Text {\n")
+          result.append(indent)
+          result.append("  val text = \"")
+          result.append(text)
+          result.append("\"\n")
+          result.append(indent)
+          result.append("}\n")
+          seq = (seq.head + 1) :: seq.tail
+        }
         case _ => ()
       }
     }
-    println("********\n" + result.toString)
     result.toString
   }
   
@@ -102,6 +111,10 @@ object HtmlInterpreter extends Application {
 
     println("create properties for child elements of the body")
     val actualPs = parse(wrap("<p /><p /><p />"))
-    println("\t" + (actualPs matches ".*(.+val name = \"p\"){3}.*"))
+    val hasPs = java.util.regex.Pattern.compile(".*(.+val name = \"p\"){3}.*", java.util.regex.Pattern.DOTALL)
+    println("\t" + (hasPs.matcher(actualPs).matches))
+    println("creates text nodes")
+    val text = parse(wrap("abc"))
+    println("\t" + (text.indexOf("val text = \"abc\"") >= 0))
   }
 }
