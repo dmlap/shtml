@@ -40,15 +40,15 @@ object HtmlInterpreterSpecs extends Specification {
         "#id -> Id\n" +
         "</script>\n"
       val parsed = parseHtmlWithBody(script)
-      println(parsed)
       parsed must contain("type Id = Example._1._0.type")
-      parsed must contain("def update(updateId: Id -> Node): String = {\n")
+      parsed must contain("def update(updateId: Id -> Node): String = \n")
+      parsed must contain("updateId(Example._1._0)")
     }
   }
   def parseHtmlWithBody(body: String): String = 
     HtmlInterpreter.parse("com" :: "example" :: Nil,
                           "Example",
-                          "<html><head><title></title></head><body>" +
+                          "<!doctype html><html><head><title></title></head><body>" +
                           body +
                           "</body></html>")
 }

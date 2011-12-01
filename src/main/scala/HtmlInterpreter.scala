@@ -49,9 +49,10 @@ object HtmlInterpreter extends Application {
     val result = new StringBuilder()
     val updateTypes = new StringBuilder()
     var updateParams: List[String] = Nil
-    val updateBody = new StringBuilder()
     val doc = Jsoup.parse(html)
     val root = doc.child(0)
+    val updateBody = new StringBuilder("    \"\"\"<!doctype html><")
+    var snippets = Map.empty[String, String]
     def visitNode(node: Node, depth: Int, seq: Int) {
       node match {
         case elem: Element 
@@ -60,24 +61,29 @@ object HtmlInterpreter extends Application {
             val matched = tokenizeSelectors.matcher(line)
             if (matched.matches) {
               val name = matched.group(2)
-              updateTypes.append("  type ")
-              updateTypes.append(name)
-              updateTypes.append(" = ")
-              updateTypes.append(className)
-              updateTypes.append(buildPath(doc.select(matched.group(1)).first()).mkString(".", ".", ""))
-              updateTypes.append(".type\n")
+              val path = className +
+                buildPath(doc.select(matched.group(1)).first()).mkString(".", ".", "")
+              updateBody.append("\"\"\" + update" + name + "(" + path + ") + \"\"\"")
+              updateTypes.append("  type " + name + " = " + path + ".type\n")
               updateParams ::= "update" + name + ": " + name + " -> Node"
+              snippets += name -> path
             }
           }
         }
         case elem: Element => {
           indent(depth, result)
           elemStart("_" + seq, elem.tagName, elem.attributes, depth, result)
+          updateBody.append("<" + elem.tagName)
+          if (elem.attributes.size > 0) {
+            updateBody.append(elem.attributes)
+          }
+          updateBody.append(">")
           elem.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
             visitNode(node, depth + 1, seq)
           }
           indent(depth, result)
           result.append("}\n")
+          updateBody.append("</" + elem.tagName + ">")
         }
         case text: TextNode => {
           indent(depth, result)
@@ -87,6 +93,7 @@ object HtmlInterpreter extends Application {
           prop("text", text.text, result)
           indent(depth, result)
           result.append("}\n")
+          updateBody.append(text.text)
         }
       }
     }
@@ -96,6 +103,11 @@ object HtmlInterpreter extends Application {
     result.append("\n")
     
     elemStart(className, root.tagName, root.attributes, 0, result)
+    updateBody.append(root.tagName)
+    if (root.attributes.size > 0) {
+      updateBody.append(" " + root.attributes)
+    }
+    updateBody.append(">")
     root.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
       visitNode(node, 1, seq)
     }
@@ -103,11 +115,12 @@ object HtmlInterpreter extends Application {
       result.append(updateTypes)
       result.append("  def update(")
       result.append(updateParams.reverse.mkString(", "))
-      result.append("): String = {\n")
+      result.append("): String = \n")
       result.append(updateBody)
-      result.append("  }\n")
+      result.append("</" + root.tagName + ">\"\"\"\n")
     }
     result.append("}\n")
+    println(result)
     result.toString
   }
 }
