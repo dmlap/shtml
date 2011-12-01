@@ -1,7 +1,6 @@
 package com.github.dmlap.shtml
 
 import org.specs2.mutable._
-import HtmlInterpreter.XmlTokenizer
 
 object HtmlInterpreterSpecs extends Specification {
   "HtmlInterpreter" should {
@@ -9,15 +8,15 @@ object HtmlInterpreterSpecs extends Specification {
       val actualTrivial = parseHtmlWithBody("")
       val expectedTrivial =
       "package com.example\n" +  
-      "object Example implements Elem {\n" +
+      "object Example extends Elem {\n" +
       "  val name = \"html\"\n" +
-      "  object _0 implements Elem {\n" +
+      "  object _0 extends Elem {\n" +
       "    val name = \"head\"\n" +
-      "    object _0 implements Elem {\n" +
+      "    object _0 extends Elem {\n" +
       "      val name = \"title\"\n" +
       "    }\n" +
       "  }\n" +
-      "  object _1 implements Elem {\n" +
+      "  object _1 extends Elem {\n" +
       "    val name = \"body\"\n" +
       "  }\n" +
       "}\n"
@@ -33,6 +32,17 @@ object HtmlInterpreterSpecs extends Specification {
     }
     "record attributes" in {
       true must_== (parseHtmlWithBody("<div class='c0 c1' />").indexOf("val `class` = \"c0 c1\"") >= 0)
+    }
+    "parses CSS selector mappings" in {
+      val script =
+        "<div id='id' />" +
+        "<script type='shtml'>\n" +
+        "#id -> Id\n" +
+        "</script>\n"
+      val parsed = parseHtmlWithBody(script)
+      println(parsed)
+      parsed must contain("type Id = Example._1._0.type")
+      parsed must contain("def update(updateId: Id -> Node): String = {\n")
     }
   }
   def parseHtmlWithBody(body: String): String = 

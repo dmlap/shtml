@@ -1,42 +1,11 @@
 package com.github.dmlap.shtml
 
 import scala.collection.JavaConverters._
-
-sealed trait HtmlEvent
-object StartDoc extends HtmlEvent
-object EndDoc extends HtmlEvent
-final case class StartElem(name: String, attributes: Map[String, String]) extends HtmlEvent
-object EndElem extends HtmlEvent
-final case class TextNode(text: String) extends HtmlEvent
-
-trait HtmlTokenizer {
-  def apply(html: String): Iterator[HtmlEvent]
-}
+import java.util.regex.Pattern
+import org.jsoup.Jsoup
+import org.jsoup.nodes.{Attributes, DataNode, Element, Node, TextNode}
 
 object HtmlInterpreter extends Application {
-  implicit object XmlTokenizer extends HtmlTokenizer {
-    import javax.xml.stream.XMLInputFactory
-    import javax.xml.stream.events.{Attribute, StartDocument, StartElement, EndDocument, EndElement, Characters}
-    import java.io.StringReader
-
-    def apply(html: String): Iterator[HtmlEvent] = new Iterator[HtmlEvent] {
-      val tokens = XMLInputFactory.newInstance().createXMLEventReader(new StringReader(html))
-      def hasNext = tokens.hasNext
-      def next() = tokens.next() match {
-        case _: StartDocument => StartDoc
-        case _: EndDocument => EndDoc
-        case startElem: StartElement => {
-          val attrs = (Map.empty[String, String] /: startElem.getAttributes.asScala) {
-            case (attrs: Map[String, String], attr: Attribute) =>
-            attrs + (attr.getName.getLocalPart -> attr.getValue)
-          }
-          StartElem(startElem.getName.getLocalPart, attrs)
-        }
-        case _: EndElement => EndElem
-        case text: Characters => TextNode(text.getData)
-      }
-    }
-  }
 
   @inline private def indent(level: Int, builder: StringBuilder) {
     (0 until level) foreach { _ => builder.append("  ") }
@@ -52,71 +21,93 @@ object HtmlInterpreter extends Application {
   }
   @inline private def elemStart(className: String,
                                 name: String,
-                                attrs: Map[String, String],
+                                attrs: Attributes,
                                 level: Int,
                                 builder: StringBuilder) {
     builder.append("object ")
     builder.append(className)
-    builder.append(" implements Elem {\n")
+    builder.append(" extends Elem {\n")
     indent(level + 1, builder)
     prop("name", name, builder)
-    attrs foreach { attr =>
+    attrs.iterator.asScala foreach { attr =>
       indent(level + 1, builder)
-      prop("`" + attr._1 + "`", attr._2, builder)
+      prop("`" + attr.getKey + "`", attr.getValue, builder)
     }
   }
+  private def buildPath(elem: Element, path: List[String] = Nil): List[String] =
+    if (elem.parent == elem.ownerDocument) {
+      path
+    } else {
+      buildPath(elem.parent, "_" + elem.siblingIndex :: path)
+    }
 
+  val tokenizeSelectors = Pattern.compile("""([^\s]+)\s+->\s+(\w+)""")
+  
   def parse(pkg: List[String],
             className: String,
-            html: String)(implicit tokenizer: HtmlTokenizer): String = {
+            html: String): String = {
     val result = new StringBuilder()
-    val itr = tokenizer(html)
-    var seq = List(0)
-    var level = 0
-    var foundRoot = false
+    val updateTypes = new StringBuilder()
+    var updateParams: List[String] = Nil
+    val updateBody = new StringBuilder()
+    val doc = Jsoup.parse(html)
+    val root = doc.child(0)
+    def visitNode(node: Node, depth: Int, seq: Int) {
+      node match {
+        case elem: Element 
+        if elem.tagName == "script" && elem.attr("type") == "shtml" => {
+          elem.data.split("\n") foreach { line =>
+            val matched = tokenizeSelectors.matcher(line)
+            if (matched.matches) {
+              val name = matched.group(2)
+              updateTypes.append("  type ")
+              updateTypes.append(name)
+              updateTypes.append(" = ")
+              updateTypes.append(className)
+              updateTypes.append(buildPath(doc.select(matched.group(1)).first()).mkString(".", ".", ""))
+              updateTypes.append(".type\n")
+              updateParams ::= "update" + name + ": " + name + " -> Node"
+            }
+          }
+        }
+        case elem: Element => {
+          indent(depth, result)
+          elemStart("_" + seq, elem.tagName, elem.attributes, depth, result)
+          elem.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
+            visitNode(node, depth + 1, seq)
+          }
+          indent(depth, result)
+          result.append("}\n")
+        }
+        case text: TextNode => {
+          indent(depth, result)
+          obj(seq, result)
+          result.append(" extends Text {\n")
+          indent(depth + 1, result)
+          prop("text", text.text, result)
+          indent(depth, result)
+          result.append("}\n")
+        }
+      }
+    }
 
     result.append("package ")
     result.append(pkg.mkString("."))
     result.append("\n")
-
-    while (!foundRoot && itr.hasNext) {
-      itr.next match {
-        case StartElem(name, attrs) => {
-          elemStart(className, name, attrs, 0, result)
-          level += 1
-          seq = 0 :: (seq.head + 1) :: seq.tail
-          foundRoot = true
-        }
-        case _ => ()
-      }
+    
+    elemStart(className, root.tagName, root.attributes, 0, result)
+    root.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
+      visitNode(node, 1, seq)
     }
-    while (itr.hasNext) {
-      itr.next match {
-        case StartElem(name, attrs) => {
-          indent(level, result)
-          elemStart("_" + seq.head, name, attrs, level, result)
-          level += 1
-          seq = 0 :: (seq.head + 1) :: seq.tail
-        }
-        case `EndElem` => {
-          indent(level - 1, result)
-          level -= 1
-          seq = seq.tail
-          result.append("}\n")
-        }
-        case TextNode(text) => {
-          indent(level, result)
-          obj(seq.head, result)
-          result.append(" implements Text {\n")
-          indent(level + 1, result)
-          prop("text", text, result)
-          indent(level, result)
-          result.append("}\n")
-          seq = (seq.head + 1) :: seq.tail
-        }
-        case _ => ()
-      }
+    if (updateParams.size > 0) {
+      result.append(updateTypes)
+      result.append("  def update(")
+      result.append(updateParams.reverse.mkString(", "))
+      result.append("): String = {\n")
+      result.append(updateBody)
+      result.append("  }\n")
     }
+    result.append("}\n")
     result.toString
   }
 }
