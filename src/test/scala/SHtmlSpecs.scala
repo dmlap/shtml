@@ -2,8 +2,8 @@ package com.github.dmlap.shtml
 
 import org.specs2.mutable._
 
-object HtmlInterpreterSpecs extends Specification {
-  "HtmlInterpreter" should {
+object SHtmlSpecs extends Specification {
+  "SHtml" should {
     "correctly interpret a valid, minimal HTML document:" in {
       val actualTrivial = parseHtmlWithBody("")
       val expectedTrivial =
@@ -46,7 +46,7 @@ object HtmlInterpreterSpecs extends Specification {
     }
   }
   def parseHtmlWithBody(body: String): String = 
-    HtmlInterpreter.parse("com" :: "example" :: Nil,
+    SHtml.parse("com" :: "example" :: Nil,
                           "Example",
                           "<!doctype html><html><head><title></title></head><body>" +
                           body +

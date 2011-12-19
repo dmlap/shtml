@@ -1,6 +1,8 @@
 sbtPlugin := true
 
-name := "static-templates"
+name := "shtml"
+
+organization := "com.github.dmlap"
 
 scalaVersion := "2.9.1"
 

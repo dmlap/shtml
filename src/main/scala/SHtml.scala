@@ -5,7 +5,7 @@ import java.util.regex.Pattern
 import org.jsoup.Jsoup
 import org.jsoup.nodes.{Attributes, DataNode, Element, Node, TextNode}
 
-object HtmlInterpreter extends Application {
+object SHtml extends Application {
 
   @inline private def indent(level: Int, builder: StringBuilder) {
     (0 until level) foreach { _ => builder.append("  ") }
@@ -120,7 +120,6 @@ object HtmlInterpreter extends Application {
       result.append("</" + root.tagName + ">\"\"\"\n")
     }
     result.append("}\n")
-    println(result)
     result.toString
   }
 }
