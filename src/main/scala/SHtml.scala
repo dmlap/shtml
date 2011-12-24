@@ -26,7 +26,7 @@ object SHtml extends Application {
                                 builder: StringBuilder) {
     builder.append("object ")
     builder.append(className)
-    builder.append(" extends Elem {\n")
+    builder.append(" {\n")
     indent(level + 1, builder)
     prop("name", name, builder)
     attrs.iterator.asScala foreach { attr =>
@@ -41,7 +41,7 @@ object SHtml extends Application {
       buildPath(elem.parent, "_" + elem.siblingIndex :: path)
     }
 
-  val tokenizeSelectors = Pattern.compile("""([^\s]+)\s+->\s+(\w+)""")
+  val tokenizeSelectors = Pattern.compile("""\s*([^\s]+)\s+->\s+(\w+)\s*""")
   
   def parse(pkg: List[String],
             className: String,
@@ -61,11 +61,11 @@ object SHtml extends Application {
             val matched = tokenizeSelectors.matcher(line)
             if (matched.matches) {
               val name = matched.group(2)
-              val path = className +
+              val path = className.capitalize +
                 buildPath(doc.select(matched.group(1)).first()).mkString(".", ".", "")
               updateBody.append("\"\"\" + update" + name + "(" + path + ") + \"\"\"")
               updateTypes.append("  type " + name + " = " + path + ".type\n")
-              updateParams ::= "update" + name + ": " + name + " -> Node"
+              updateParams ::= "update" + name + ": " + name + " => String"
               snippets += name -> path
             }
           }
@@ -88,7 +88,7 @@ object SHtml extends Application {
         case text: TextNode => {
           indent(depth, result)
           obj(seq, result)
-          result.append(" extends Text {\n")
+          result.append(" {\n")
           indent(depth + 1, result)
           prop("text", text.text, result)
           indent(depth, result)
@@ -97,12 +97,14 @@ object SHtml extends Application {
         }
       }
     }
-
-    result.append("package ")
-    result.append(pkg.mkString("."))
-    result.append("\n")
     
-    elemStart(className, root.tagName, root.attributes, 0, result)
+    if (pkg.size > 0) {
+      result.append("package ")
+      result.append(pkg.mkString("."))
+      result.append("\n")
+    }
+    
+    elemStart(className.capitalize, root.tagName, root.attributes, 0, result)
     updateBody.append(root.tagName)
     if (root.attributes.size > 0) {
       updateBody.append(" " + root.attributes)

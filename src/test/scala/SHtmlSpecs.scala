@@ -8,15 +8,15 @@ object SHtmlSpecs extends Specification {
       val actualTrivial = parseHtmlWithBody("")
       val expectedTrivial =
       "package com.example\n" +  
-      "object Example extends Elem {\n" +
+      "object Example {\n" +
       "  val name = \"html\"\n" +
-      "  object _0 extends Elem {\n" +
+      "  object _0 {\n" +
       "    val name = \"head\"\n" +
-      "    object _0 extends Elem {\n" +
+      "    object _0 {\n" +
       "      val name = \"title\"\n" +
       "    }\n" +
       "  }\n" +
-      "  object _1 extends Elem {\n" +
+      "  object _1 {\n" +
       "    val name = \"body\"\n" +
       "  }\n" +
       "}\n"
@@ -33,16 +33,25 @@ object SHtmlSpecs extends Specification {
     "record attributes" in {
       true must_== (parseHtmlWithBody("<div class='c0 c1' />").indexOf("val `class` = \"c0 c1\"") >= 0)
     }
-    "parses CSS selector mappings" in {
+    "parse CSS selector mappings" in {
       val script =
         "<div id='id' />" +
         "<script type='shtml'>\n" +
-        "#id -> Id\n" +
+        "  #id -> Id  \n" +
         "</script>\n"
       val parsed = parseHtmlWithBody(script)
       parsed must contain("type Id = Example._1._0.type")
-      parsed must contain("def update(updateId: Id -> Node): String = \n")
+      parsed must contain("def update(updateId: Id => String): String = \n")
       parsed must contain("updateId(Example._1._0)")
+    }
+    "not emit a package declaration if none is provided" in {
+      SHtml.parse(Nil, "Example", "") must not contain("package")
+    }
+    "capitalize the top-level object name" in {
+      val result = SHtml.parse(Nil, "example", "<div id='id' /><script type='shtml'>#id -> Id</script>")
+      result must startWith("object Example")
+      result must contain("type Id = Example.")
+      result must contain("updateId(Example.")
     }
   }
   def parseHtmlWithBody(body: String): String = 
