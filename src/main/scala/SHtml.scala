@@ -19,21 +19,6 @@ object SHtml extends Application {
     builder.append(value)
     builder.append("\"\n")
   }
-  @inline private def elemStart(className: String,
-                                name: String,
-                                attrs: Attributes,
-                                level: Int,
-                                builder: StringBuilder) {
-    builder.append("object ")
-    builder.append(className)
-    builder.append(" {\n")
-    indent(level + 1, builder)
-    prop("name", name, builder)
-    attrs.iterator.asScala foreach { attr =>
-      indent(level + 1, builder)
-      prop("`" + attr.getKey + "`", attr.getValue, builder)
-    }
-  }
   private def buildPath(elem: Element, path: List[String] = Nil): List[String] =
     if (elem.parent == elem.ownerDocument) {
       path
@@ -51,49 +36,86 @@ object SHtml extends Application {
     var updateParams: List[String] = Nil
     val doc = Jsoup.parse(html)
     val root = doc.child(0)
-    val updateBody = new StringBuilder("    \"\"\"<!doctype html><")
-    var snippets = Map.empty[String, String]
-    def visitNode(node: Node, depth: Int, seq: Int) {
-      node match {
-        case elem: Element 
-        if elem.tagName == "script" && elem.attr("type") == "shtml" => {
-          elem.data.split("\n") foreach { line =>
-            val matched = tokenizeSelectors.matcher(line)
-            if (matched.matches) {
-              val name = matched.group(2)
-              val path = className.capitalize +
-                buildPath(doc.select(matched.group(1)).first()).mkString(".", ".", "")
-              updateBody.append("\"\"\" + update" + name + "(" + path + ") + \"\"\"")
-              updateTypes.append("  type " + name + " = " + path + ".type\n")
-              updateParams ::= "update" + name + ": " + name + " => String"
-              snippets += name -> path
-            }
-          }
+    val updateBody = new StringBuilder("    \"\"\"<!doctype html>")
+    var snippets = Map.empty[Element, (String, String)]
+
+    root.select("script[type=shtml]").iterator.asScala foreach { element =>
+      element.data.split("\n") foreach { line =>
+        val matched = tokenizeSelectors.matcher(line)
+        if (matched.matches) {
+          val name = matched.group(2)
+          val elem = doc.select(matched.group(1)).first()
+          val path = className.capitalize +
+            buildPath(elem).mkString(".", ".", "")
+          updateTypes.append("  type " + name + " = " + path + ".type\n")
+          updateParams ::= "update" + name + ": " + name + " => Node"
+          snippets += elem -> (name -> path)
         }
+      }
+      element.remove()
+    }
+
+    def elemStart(className: String,
+                  elem: Element,
+                  level: Int) {
+      result.append("object ")
+      result.append(className)
+      result.append(" extends Elem {\n")
+      indent(level + 1, result)
+      prop("name", elem.tagName, result)
+      elem.attributes.iterator.asScala foreach { attr =>
+        indent(level + 1, result)
+        prop("`" + attr.getKey + "`", attr.getValue, result)
+      }
+      val outputNodeCount = elem.childNodes.asScala.foldLeft(0) { (seq, node) =>
+        if (visitNode(node, level + 1, seq)) {
+          seq + 1
+        } else {
+          seq
+        }
+      }
+      if (outputNodeCount > 0) {
+        indent(level + 1, result)
+        result.append("override val children = List(")
+        result.append((0 until outputNodeCount).map("_" + _).mkString(", "))
+        result.append(")\n")
+      }
+    }
+
+    def visitNode(node: Node, depth: Int, seq: Int): Boolean = {
+      node match {
         case elem: Element => {
-          indent(depth, result)
-          elemStart("_" + seq, elem.tagName, elem.attributes, depth, result)
-          updateBody.append("<" + elem.tagName)
-          if (elem.attributes.size > 0) {
-            updateBody.append(elem.attributes)
-          }
-          updateBody.append(">")
-          elem.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
-            visitNode(node, depth + 1, seq)
+          snippets.get(elem) match {
+            case Some((name, path)) => {
+              updateBody.append("\"\"\" + update" + name + "(" + path + ").asString + \"\"\"")
+              indent(depth, result)
+              elemStart("_" + seq, elem, depth)
+            }
+            case _ => {
+              updateBody.append("<" + elem.tagName)
+              if (elem.attributes.size > 0) {
+                updateBody.append(elem.attributes)
+              }
+              updateBody.append(">")
+              indent(depth, result)
+              elemStart("_" + seq, elem, depth)
+              updateBody.append("</" + elem.tagName + ">")
+            }
           }
           indent(depth, result)
           result.append("}\n")
-          updateBody.append("</" + elem.tagName + ">")
+          true
         }
         case text: TextNode => {
           indent(depth, result)
           obj(seq, result)
-          result.append(" {\n")
+          result.append(" extends Text {\n")
           indent(depth + 1, result)
           prop("text", text.text, result)
           indent(depth, result)
           result.append("}\n")
           updateBody.append(text.text)
+          true
         }
       }
     }
@@ -103,16 +125,15 @@ object SHtml extends Application {
       result.append(pkg.mkString("."))
       result.append("\n")
     }
+    result.append("import com.github.dmlap.{Elem, Text}\n")
     
-    elemStart(className.capitalize, root.tagName, root.attributes, 0, result)
-    updateBody.append(root.tagName)
+    
+    updateBody.append("<" + root.tagName)
     if (root.attributes.size > 0) {
-      updateBody.append(" " + root.attributes)
+      updateBody.append(root.attributes)
     }
     updateBody.append(">")
-    root.childNodes.asScala.zipWithIndex foreach { case (node, seq) =>
-      visitNode(node, 1, seq)
-    }
+    elemStart(className.capitalize, root, 0)
     if (updateParams.size > 0) {
       result.append(updateTypes)
       result.append("  def update(")
