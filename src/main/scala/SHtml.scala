@@ -27,6 +27,26 @@ object SHtml extends Application {
     }
 
   val tokenizeSelectors = Pattern.compile("""\s*([^\s]+)\s+->\s+(\w+)\s*""")
+
+  private trait NodeVisitor {
+    def onText(text: TextNode, depth: Int, seq: Int)
+    def onElemStart(elem: Element, depth: Int, seq: Int)
+    def onElemEnd(elem: Element, depth: Int, seq: Int)
+  }
+  private def traverse(node: Node, depth: Int = 0, seq: Int = 0, visitor: NodeVisitor) {
+    node match {
+      case elem: Element => {
+        visitor.onElemStart(elem, depth, seq)
+        elem.childNodes.iterator.asScala.zipWithIndex foreach { case (node, seq) =>
+          traverse(node, depth + 1, seq, visitor)
+        }
+        visitor.onElemEnd(elem, depth, seq)
+      }
+      case text: TextNode => {
+        visitor.onText(text, depth, seq)
+      }
+    }
+  }
   
   def parse(pkg: List[String],
             className: String,
@@ -39,6 +59,7 @@ object SHtml extends Application {
     val updateBody = new StringBuilder("    \"\"\"<!doctype html>")
     var snippets = Map.empty[Element, (String, String)]
 
+    // Find all snippets, record their contents and then remove them
     root.select("script[type=shtml]").iterator.asScala foreach { element =>
       element.data.split("\n") foreach { line =>
         val matched = tokenizeSelectors.matcher(line)
@@ -54,71 +75,6 @@ object SHtml extends Application {
       }
       element.remove()
     }
-
-    def elemStart(className: String,
-                  elem: Element,
-                  level: Int) {
-      result.append("object ")
-      result.append(className)
-      result.append(" extends Elem {\n")
-      indent(level + 1, result)
-      prop("name", elem.tagName, result)
-      elem.attributes.iterator.asScala foreach { attr =>
-        indent(level + 1, result)
-        prop("`" + attr.getKey + "`", attr.getValue, result)
-      }
-      val outputNodeCount = elem.childNodes.asScala.foldLeft(0) { (seq, node) =>
-        if (visitNode(node, level + 1, seq)) {
-          seq + 1
-        } else {
-          seq
-        }
-      }
-      if (outputNodeCount > 0) {
-        indent(level + 1, result)
-        result.append("override val children = List(")
-        result.append((0 until outputNodeCount).map("_" + _).mkString(", "))
-        result.append(")\n")
-      }
-    }
-
-    def visitNode(node: Node, depth: Int, seq: Int): Boolean = {
-      node match {
-        case elem: Element => {
-          snippets.get(elem) match {
-            case Some((name, path)) => {
-              updateBody.append("\"\"\" + update" + name + "(" + path + ").asString + \"\"\"")
-              indent(depth, result)
-              elemStart("_" + seq, elem, depth)
-            }
-            case _ => {
-              updateBody.append("<" + elem.tagName)
-              if (elem.attributes.size > 0) {
-                updateBody.append(elem.attributes)
-              }
-              updateBody.append(">")
-              indent(depth, result)
-              elemStart("_" + seq, elem, depth)
-              updateBody.append("</" + elem.tagName + ">")
-            }
-          }
-          indent(depth, result)
-          result.append("}\n")
-          true
-        }
-        case text: TextNode => {
-          indent(depth, result)
-          obj(seq, result)
-          result.append(" extends Text {\n")
-          indent(depth + 1, result)
-          prop("text", text.text, result)
-          indent(depth, result)
-          result.append("}\n")
-          updateBody.append(text.text)
-          true
-        }
-      }
-    }
     
     if (pkg.size > 0) {
       result.append("package ")
@@ -127,22 +83,87 @@ object SHtml extends Application {
     }
     result.append("import com.github.dmlap.{Elem, Text}\n")
     
-    
-    updateBody.append("<" + root.tagName)
-    if (root.attributes.size > 0) {
-      updateBody.append(root.attributes)
-    }
-    updateBody.append(">")
-    elemStart(className.capitalize, root, 0)
-    if (updateParams.size > 0) {
-      result.append(updateTypes)
-      result.append("  def update(")
-      result.append(updateParams.reverse.mkString(", "))
-      result.append("): String = \n")
-      result.append(updateBody)
-      result.append("</" + root.tagName + ">\"\"\"\n")
-    }
-    result.append("}\n")
+    // build the update function
+    traverse(node = root, visitor = new NodeVisitor {
+      var pruneToDepth: Int = Integer.MAX_VALUE
+      def onText(text: TextNode, depth: Int, seq: Int) {
+        if (depth < pruneToDepth) {
+          updateBody.append(text.text)
+        }
+      }
+      def onElemStart(elem: Element, depth: Int, seq: Int) {
+        (pruneToDepth, snippets.get(elem)) match {
+          case (pruneDepth, _) if depth >= pruneDepth => ()
+          case (_, Some((name, path))) => {
+            updateBody.append("\"\"\" + update" + name + "(" + path + ").asString + \"\"\"")
+            pruneToDepth = depth
+          }
+          case _ => {
+            updateBody.append("<" + elem.tagName)
+            if (elem.attributes.size > 0) {
+              updateBody.append(elem.attributes)
+            }
+            updateBody.append(">")
+          }
+        }
+      }
+      def onElemEnd(elem: Element, depth: Int, seq: Int) {
+        (pruneToDepth, snippets.get(elem)) match {
+          case (pruneDepth, _) if depth == pruneDepth =>
+            pruneToDepth = Integer.MAX_VALUE
+          case (pruneDepth, _) if depth > pruneDepth => ()
+          case _ => updateBody.append("</" + elem.tagName + ">")
+        }
+      }
+    })
+
+    // output Scala objects corresponding to DOM nodes
+    traverse(node = root, visitor = new NodeVisitor {
+      def onText(text: TextNode, depth: Int, seq: Int) {
+        indent(depth, result)
+        obj(seq, result)
+        result.append(" extends Text {\n")
+        indent(depth + 1, result)
+        prop("text", text.text, result)
+        indent(depth, result)
+        result.append("}\n")
+      }
+      def onElemStart(elem: Element, depth: Int, seq: Int) {
+        indent(depth, result)
+        result.append("object ")
+        val name = if (depth == 0) {
+          className.capitalize
+        } else {
+          "_" + seq
+        }
+        result.append(name)
+        result.append(" extends Elem {\n")
+        indent(depth + 1, result)
+        prop("name", elem.tagName, result)
+        elem.attributes.iterator.asScala foreach { attr =>
+          indent(depth + 1, result)
+          prop("`" + attr.getKey + "`", attr.getValue, result)
+        }
+      }
+      def onElemEnd(elem: Element, depth: Int, seq: Int) {
+        if (elem.childNodes.size > 0) {
+          indent(depth + 1, result)
+          result.append("override val children = List(")
+          result.append((0 until elem.childNodes.size).map("_" + _).mkString(", "))
+          result.append(")\n")
+        }
+        if (depth == 0 && updateParams.size > 0) {
+          result.append(updateTypes)
+          result.append("  def update(")
+          result.append(updateParams.reverse.mkString(", "))
+          result.append("): String = \n")
+          result.append(updateBody)
+          result.append("\"\"\"\n")
+        }
+        indent(depth, result)
+        result.append("}\n")
+      }
+    })
     result.toString
   }
 }

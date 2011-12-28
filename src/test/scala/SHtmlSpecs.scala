@@ -67,6 +67,13 @@ object SHtmlSpecs extends Specification {
       result must not be matching("<div id=['\"]id['\"]")
       result must contain("</title></head><body>\"\"\" + updateId(Example._1._0).asString + \"\"\"<div></div>")
     }
+    "not output child nodes of snippet elements unless they were included in the snippet output" in {
+      val result = parseHtmlWithBody("<div id='id'><p>hi</div><script type='shtml'>#id -> Id</script>")
+      result must not contain("<div")
+      result must not contain("<p>")
+      result must contain("val name = \"p\"")
+      result must not contain("hi</body>")
+    } 
   }
   def parseHtmlWithBody(body: String): String = 
     SHtml.parse("com" :: "example" :: Nil,
